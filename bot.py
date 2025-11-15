@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 # ====== Налаштування (обов'язково заміни) ======
 TOKEN = "8582965079:AAH4bz9IE0bRoyqsYlO2eriqgzE5jPpMCes"               # <- встав свій токен
-CHAT_ID = -1002456737211           # <- основний чат/канал (цілочисловий)
+CHAT_ID = -1003380446699              # <- основний чат/канал
 # ------------------------------------------------
 
 logging.basicConfig(level=logging.INFO)
@@ -32,14 +32,9 @@ user_has_reacted = set() # set(user_id) — користувачі, які вж�
 
 # ====== Допоміжна функція для клавіатури ======
 def create_keyboard(buttons_data, max_in_row=3):
-    """
-    buttons_data: list of dicts: {"text": "...", "callback": "..."} або {"text": "...", "url": "..."}
-    max_in_row: максимальна кількість кнопок в одному рядку
-    """
     reaction_buttons = []
     url_buttons = []
 
-    # Розділяємо кнопки
     for btn in buttons_data:
         if "url" in btn:
             url_buttons.append(InlineKeyboardButton(text=btn["text"], url=btn["url"]))
@@ -49,14 +44,11 @@ def create_keyboard(buttons_data, max_in_row=3):
                 InlineKeyboardButton(text=f"{btn['text']} {cnt}", callback_data=btn["callback"])
             )
 
-    # Формуємо рядки
     inline_keyboard = []
 
-    # Рядки з реакціями
     for i in range(0, len(reaction_buttons), max_in_row):
         inline_keyboard.append(reaction_buttons[i:i+max_in_row])
 
-    # Рядки з посиланнями
     for i in range(0, len(url_buttons), max_in_row):
         inline_keyboard.append(url_buttons[i:i+max_in_row])
 
@@ -140,7 +132,6 @@ async def post_add_button_or_done(m: types.Message, state: FSMContext):
     buttons = data.get("buttons") or []
     text = m.text or ""
 
-    # Якщо користувач надіслав /done — відправляємо пост
     if text.strip() == "/done":
         post_text = data.get("post_text", "") or ""
         media = data.get("media")
@@ -156,7 +147,8 @@ async def post_add_button_or_done(m: types.Message, state: FSMContext):
                         photo=media["file_id"],
                         caption=post_text,
                         reply_markup=keyboard,
-                        message_thread_id=thread_id if thread_id != 0 else None
+                        message_thread_id=thread_id if thread_id != 0 else None,
+                        parse_mode="HTML"
                     )
                 elif media["type"] == "video":
                     await bot.send_video(
@@ -164,7 +156,8 @@ async def post_add_button_or_done(m: types.Message, state: FSMContext):
                         video=media["file_id"],
                         caption=post_text,
                         reply_markup=keyboard,
-                        message_thread_id=thread_id if thread_id != 0 else None
+                        message_thread_id=thread_id if thread_id != 0 else None,
+                        parse_mode="HTML"
                     )
                 elif media["type"] == "document":
                     await bot.send_document(
@@ -172,14 +165,16 @@ async def post_add_button_or_done(m: types.Message, state: FSMContext):
                         document=media["file_id"],
                         caption=post_text,
                         reply_markup=keyboard,
-                        message_thread_id=thread_id if thread_id != 0 else None
+                        message_thread_id=thread_id if thread_id != 0 else None,
+                        parse_mode="HTML"
                     )
             else:
                 await bot.send_message(
                     chat_id=CHAT_ID,
                     text=post_text,
                     reply_markup=keyboard,
-                    message_thread_id=thread_id if thread_id != 0 else None
+                    message_thread_id=thread_id if thread_id != 0 else None,
+                    parse_mode="HTML"
                 )
 
             await m.answer("Пост опубліковано ✅")
@@ -247,7 +242,6 @@ async def handle_reaction(cb: types.CallbackQuery):
     reaction_counts[key] += 1
     reaction_users[key].add(user_id)
 
-    # Оновлюємо клавіатуру, зберігаючи URL кнопки
     old_buttons = []
     if cb.message.reply_markup and cb.message.reply_markup.inline_keyboard:
         for row in cb.message.reply_markup.inline_keyboard:
