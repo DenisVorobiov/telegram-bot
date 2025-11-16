@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 # ====== Налаштування ======
 TOKEN = "8582965079:AAH4bz9IE0bRoyqsYlO2eriqgzE5jPpMCes"  # <- встав свій токен
-CHAT_ID = -1003380446699  # <- основний чат/канал
+CHAT_ID = -1002456737211  # <- основний чат/канал
 # --------------------------
 
 logging.basicConfig(level=logging.INFO)
