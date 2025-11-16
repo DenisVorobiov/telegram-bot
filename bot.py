@@ -7,10 +7,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-# ====== Налаштування ======
-TOKEN = "8582965079:AAH4bz9IE0bRoyqsYlO2eriqgzE5jPpMCes"  # <- встав свій токен
-CHAT_ID = -1002456737211  # <- основний чат/канал
-# --------------------------
+# ======================
+# ⚙ НАЛАШТУВАННЯ
+# ======================
+TOKEN = "8582965079:AAH4bz9IE0bRoyqsYlO2eriqgzE5jPpMCes"
+CHAT_ID = -1002456737211  # твій основний чат
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -19,242 +20,183 @@ bot = Bot(token=TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-# ====== FSM стани ======
+# ======================
+# 📌 FSM стани
+# ======================
 class PostStates(StatesGroup):
-    waiting_for_thread = State()
-    waiting_for_text = State()
-    waiting_for_buttons = State()
+    waiting_thread = State()
+    waiting_media = State()
+    waiting_text = State()
+    waiting_buttons = State()
 
-# ====== Зберігання стану реакцій ======
-reaction_counts = {}     # callback -> int
-reaction_users = {}      # callback -> set(user_id)
-user_has_reacted = set() # set(user_id) — користувачі, які вже проголосували за поточний пост
+# ======================
+# 🧩 Розміщення URL-кнопок (1,2,1,2…)
+# ======================
+def build_buttons(buttons):
+    url_btns = [b for b in buttons if "url" in b]
+    cb_btns = [b for b in buttons if "callback" in b]
 
-# ====== Допоміжна функція для клавіатури ======
-def create_keyboard(buttons_data, max_in_row=3):
-    reaction_buttons = []
-    url_buttons = []
+    keyboard = []
 
-    # Розділяємо кнопки
-    for btn in buttons_data:
-        if "url" in btn:
-            url_buttons.append(InlineKeyboardButton(text=btn["text"], url=btn["url"]))
+    # --- Алгоритм для URL кнопок: 1,2,1,2… ---
+    i = 0
+    odd = True
+    while i < len(url_btns):
+        if odd:
+            keyboard.append([InlineKeyboardButton(text=url_btns[i]["text"], url=url_btns[i]["url"])])
+            i += 1
         else:
-            cnt = reaction_counts.get(btn["callback"], 0)
-            reaction_buttons.append(
-                InlineKeyboardButton(text=f"{btn['text']} {cnt}", callback_data=btn["callback"])
-            )
+            keyboard.append([
+                InlineKeyboardButton(text=url_btns[i]["text"], url=url_btns[i]["url"]),
+                InlineKeyboardButton(text=url_btns[i + 1]["text"], url=url_btns[i + 1]["url"])
+            ])
+            i += 2
+        odd = not odd
 
-    inline_keyboard = []
+    # --- Callback кнопки (до 3 в ряд) ---
+    for i in range(0, len(cb_btns), 3):
+        row = []
+        for b in cb_btns[i:i + 3]:
+            row.append(InlineKeyboardButton(text=b["text"], callback_data=b["callback"]))
+        keyboard.append(row)
 
-    # ============================
-    # URL кнопки — динамічне розміщення
-    # ============================
-    if url_buttons:
-        # перша кнопка окремо
-        inline_keyboard.append([url_buttons[0]])
-        # решта по 2 на рядок
-        for i in range(1, len(url_buttons), 2):
-            inline_keyboard.append(url_buttons[i:i+2])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-    # ============================
-    # Callback кнопки
-    # ============================
-    for i in range(0, len(reaction_buttons), max_in_row):
-        inline_keyboard.append(reaction_buttons[i:i+max_in_row])
 
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-# ====== Команди діагностики ======
-@dp.message(Command("start"))
-async def cmd_start(m: types.Message):
-    await m.answer("Привіт! Бот живий. Використай /post щоб створити пост.")
-
-@dp.message(Command("get_chat_id"))
-async def get_chat_id(m: types.Message):
-    await m.answer(f"CHAT_ID цього чату: {m.chat.id}")
-
-@dp.message(Command("get_thread_id"))
-async def get_thread_id(m: types.Message):
-    if m.message_thread_id:
-        await m.answer(f"THREAD_ID цієї теми: {m.message_thread_id}")
-    else:
-        await m.answer("Це повідомлення не в темі.")
-
-# ====== Створення посту ======
+# ======================
+# 🔥 /post — запуск створення поста
+# ======================
 @dp.message(Command("post"))
-async def cmd_post_start(m: types.Message, state: FSMContext):
+async def start_post(m: types.Message, state: FSMContext):
     await state.clear()
-    reaction_counts.clear()
-    reaction_users.clear()
-    user_has_reacted.clear()
-    log.info("Started new /post flow, cleared reaction storages")
+    await m.answer("Введи THREAD_ID (0 = головний чат):")
+    await state.set_state(PostStates.waiting_thread)
 
-    await m.answer(
-        "Введи THREAD_ID (число). Введи 0 щоб постити у основний канал (без гілки)."
-    )
-    await state.set_state(PostStates.waiting_for_thread)
 
-# ====== THREAD_ID ======
-@dp.message(PostStates.waiting_for_thread)
-async def post_thread_input(m: types.Message, state: FSMContext):
-    text = (m.text or "").strip()
-    if not text.isdigit():
-        await m.answer("Помилка: введи тільки число, наприклад: 0 або 4")
+# ======================
+# 🧵 THREAD_ID
+# ======================
+@dp.message(PostStates.waiting_thread)
+async def set_thread(m: types.Message, state: FSMContext):
+    if not m.text.isdigit():
+        await m.answer("Введи число, наприклад 0 або 5.")
         return
-    thread_id = int(text)
-    await state.update_data(thread_id=thread_id)
-    await m.answer(
-        f"THREAD_ID збережено: {thread_id}\nТепер надішли текст посту (або медіа) → після тексту додаватимеш кнопки і /done."
-    )
-    await state.set_state(PostStates.waiting_for_text)
 
-# ====== Текст або медіа ======
-@dp.message(PostStates.waiting_for_text)
-async def post_receive_text_or_media(m: types.Message, state: FSMContext):
-    if m.photo:
-        media = {"type": "photo", "file_id": m.photo[-1].file_id, "caption": m.caption or ""}
-        await state.update_data(media=media, post_text="")
-        await m.answer("Фото збережено. Тепер додавай кнопки або /done")
-    elif m.video:
-        media = {"type": "video", "file_id": m.video.file_id, "caption": m.caption or ""}
-        await state.update_data(media=media, post_text="")
-        await m.answer("Відео збережено. Тепер додавай кнопки або /done")
-    elif m.document:
-        media = {"type": "document", "file_id": m.document.file_id, "caption": m.caption or ""}
-        await state.update_data(media=media, post_text="")
-        await m.answer("Документ збережено. Тепер додавай кнопки або /done")
+    await state.update_data(thread_id=int(m.text))
+    await m.answer("Тепер надішли МЕДІА або 0:")
+    await state.set_state(PostStates.waiting_media)
+
+
+# ======================
+# 🖼 МЕДІА або 0
+# ======================
+@dp.message(PostStates.waiting_media)
+async def set_media(m: types.Message, state: FSMContext):
+    if m.text == "0":
+        await state.update_data(media=None)
     else:
-        # зберігаємо текст у HTML, щоб посилання залишались
-        await state.update_data(post_text=m.text or "", media=None)
-        await m.answer(
-            "Текст збережено. Тепер додавай кнопки (формат: 'Текст URL' або 'Текст callback') або /done"
-        )
-    await state.set_state(PostStates.waiting_for_buttons)
+        media = None
+        if m.photo:
+            media = ("photo", m.photo[-1].file_id)
+        elif m.video:
+            media = ("video", m.video.file_id)
+        elif m.document:
+            media = ("document", m.document.file_id)
 
-# ====== Додавання кнопок / завершення ======
-@dp.message(PostStates.waiting_for_buttons)
-async def post_add_button_or_done(m: types.Message, state: FSMContext):
+        if not media:
+            await m.answer("Надішли МЕДІА або 0.")
+            return
+
+        await state.update_data(media=media)
+
+    await m.answer("Тепер надішли ТЕКСТ або 0:")
+    await state.set_state(PostStates.waiting_text)
+
+
+# ======================
+# 📝 ТЕКСТ або 0
+# ======================
+@dp.message(PostStates.waiting_text)
+async def set_text(m: types.Message, state: FSMContext):
+    if m.text == "0":
+        await state.update_data(text="")
+    else:
+        await state.update_data(text=m.html_text)
+
+    await state.update_data(buttons=[])
+    await m.answer("Додавай кнопки (Формат: `Name URL` або `Name callback`) або /done")
+    await state.set_state(PostStates.waiting_buttons)
+
+
+# ======================
+# 🔘 Додавання кнопок або публікація
+# ======================
+@dp.message(PostStates.waiting_buttons)
+async def add_buttons(m: types.Message, state: FSMContext):
     data = await state.get_data()
-    buttons = data.get("buttons") or []
-    text = m.text or ""
+    buttons = data["buttons"]
 
-    if text.strip() == "/done":
-        post_text = data.get("post_text", "")
-        media = data.get("media")
-        thread_id = data.get("thread_id", 0)
-        keyboard = create_keyboard(buttons) if buttons else None
+    if m.text == "/done":
+        return await publish_post(m, state)
 
-        try:
-            if media:
-                if media["type"] == "photo":
-                    await bot.send_photo(
-                        chat_id=CHAT_ID,
-                        photo=media["file_id"],
-                        caption=post_text,
-                        parse_mode="HTML",
-                        reply_markup=keyboard,
-                        message_thread_id=thread_id if thread_id != 0 else None
-                    )
-                elif media["type"] == "video":
-                    await bot.send_video(
-                        chat_id=CHAT_ID,
-                        video=media["file_id"],
-                        caption=post_text,
-                        parse_mode="HTML",
-                        reply_markup=keyboard,
-                        message_thread_id=thread_id if thread_id != 0 else None
-                    )
-                elif media["type"] == "document":
-                    await bot.send_document(
-                        chat_id=CHAT_ID,
-                        document=media["file_id"],
-                        caption=post_text,
-                        parse_mode="HTML",
-                        reply_markup=keyboard,
-                        message_thread_id=thread_id if thread_id != 0 else None
-                    )
-            else:
-                await bot.send_message(
-                    chat_id=CHAT_ID,
-                    text=post_text,
-                    parse_mode="HTML",
-                    reply_markup=keyboard,
-                    message_thread_id=thread_id if thread_id != 0 else None
-                )
-
-            await m.answer("Пост опубліковано ✅")
-            log.info("Post published to chat_id=%s thread_id=%s", CHAT_ID, thread_id)
-        except Exception as e:
-            await m.answer(f"Помилка при відправці: {e}")
-            log.exception("Send error")
-
-        await state.clear()
-        reaction_counts.clear()
-        reaction_users.clear()
-        user_has_reacted.clear()
-        return
-
-    # Розбираємо рядок як кнопку
-    parts = text.strip().split(maxsplit=1)
-    if not parts[0]:
-        await m.answer("Невірний формат кнопки. Наприклад: 'Like like' або 'Go https://t.me'")
-        return
+    parts = m.text.split(maxsplit=1)
 
     if len(parts) == 2 and parts[1].startswith("http"):
-        btn = {"text": parts[0], "url": parts[1]}
+        buttons.append({"text": parts[0], "url": parts[1]})
     elif len(parts) == 2:
-        btn = {"text": parts[0], "callback": parts[1]}
+        buttons.append({"text": parts[0], "callback": parts[1]})
     else:
-        btn = {"text": parts[0], "callback": parts[0]}
-
-    buttons.append(btn)
-    await state.update_data(buttons=buttons)
-    await m.answer(f"Кнопка додана: {btn['text']} ({'url' if 'url' in btn else btn.get('callback')})")
-
-# ====== Обробка callback ======
-@dp.callback_query()
-async def handle_reaction(cb: types.CallbackQuery):
-    user_id = cb.from_user.id
-    key = cb.data
-
-    if user_id in user_has_reacted:
-        await cb.answer("Ти вже відреагував ❗", show_alert=True)
+        await m.answer("Невірний формат. Приклад:\n`Like like`\n`Open https://t.me/...`")
         return
 
-    user_has_reacted.add(user_id)
+    await state.update_data(buttons=buttons)
+    await m.answer("Кнопка додана!")
 
-    if key not in reaction_counts:
-        reaction_counts[key] = 0
-        reaction_users[key] = set()
-    reaction_counts[key] += 1
-    reaction_users[key].add(user_id)
 
-    # Оновлюємо клавіатуру
-    old_buttons = []
-    if cb.message.reply_markup and cb.message.reply_markup.inline_keyboard:
-        for row in cb.message.reply_markup.inline_keyboard:
-            for b in row:
-                if getattr(b, "callback_data", None):
-                    old_buttons.append({"text": b.text.split()[0], "callback": b.callback_data})
-                elif getattr(b, "url", None):
-                    old_buttons.append({"text": b.text, "url": b.url})
+# ======================
+# 🚀 Публікація поста
+# ======================
+async def publish_post(m: types.Message, state: FSMContext):
+    data = await state.get_data()
 
-    new_kb = create_keyboard(old_buttons)
-    try:
-        await cb.message.edit_reply_markup(reply_markup=new_kb)
-    except Exception:
-        log.exception("Failed to edit reply_markup")
+    thread_id = data["thread_id"]
+    media = data["media"]
+    text = data["text"]
+    buttons = data["buttons"]
 
-    await cb.answer("Ти відреагував ✅")
+    kb = build_buttons(buttons) if buttons else None
 
-# ====== Запуск ======
+    kwargs = dict(
+        chat_id=CHAT_ID,
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+    if thread_id != 0:
+        kwargs["message_thread_id"] = thread_id
+
+    # --- Відправка контенту ---
+    if media:
+        type_, file_id = media
+        if type_ == "photo":
+            await bot.send_photo(photo=file_id, caption=text, **kwargs)
+        elif type_ == "video":
+            await bot.send_video(video=file_id, caption=text, **kwargs)
+        elif type_ == "document":
+            await bot.send_document(document=file_id, caption=text, **kwargs)
+    else:
+        await bot.send_message(text=text, **kwargs)
+
+    await m.answer("Пост опубліковано ✅")
+    await state.clear()
+
+
+# ======================
+# ▶ Запуск бота
+# ======================
 async def main():
-    log.info("Bot starting...")
+    log.info("Bot started.")
     await dp.start_polling(bot)
 
+
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except Exception:
-        log.exception("Fatal")
+    asyncio.run(main())
